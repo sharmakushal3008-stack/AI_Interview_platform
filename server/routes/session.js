@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const { extractPdfText } = require('../services/pdfService');
 
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const Session = require('../models/Session');
 const { generateQuestions, extractSkillsFromResume, getNextDifficulty } = require('../services/aiService');
 
@@ -31,7 +31,7 @@ router.post('/start', upload.single('resume'), async (req, res) => {
     });
 
     const session = new Session({
-      sessionId: uuidv4(),
+      sessionId: crypto.randomUUID(),
       role, level, roundType,
       resumeText,
       extractedSkills,
