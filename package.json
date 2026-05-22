@@ -1,0 +1,15 @@
+{
+  "name": "ai-mock-interview-platform",
+  "version": "1.0.0",
+  "description": "Full-stack mock interview platform with adaptive AI questioning, voice-to-text, multi-axis evaluation, and personalized feedback.",
+  "scripts": {
+    "setup": "npm install --prefix client && npm install --prefix server",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "build:client": "npm run build --prefix client",
+    "start:server": "npm start --prefix server"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
