@@ -1,4 +1,5 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { getOfflineQuestions } = require('./questionBank');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
@@ -55,19 +56,176 @@ Return ONLY a valid JSON array. No markdown, no explanation. Schema:
     if (!jsonMatch) throw new Error('AI did not return valid JSON array');
     return JSON.parse(jsonMatch[0]);
   } catch (err) {
-    if (err.message.includes('429') || err.message.includes('exhausted')) {
-      console.log('Returning mock questions due to rate limit.');
-      return Array(count).fill(0).map((_, i) => ({
-        question: `[MOCK QUESTION ${i+1}] Can you explain how you would design a scalable system using ${skillList.split(',')[0] || 'Node.js'}?`,
-        type: i % 2 === 0 ? 'technical' : 'system_design',
-        difficulty: i < 3 ? 'easy' : i < 6 ? 'medium' : 'hard',
-        expectedKeyPoints: ['Identify bottlenecks', 'Propose caching', 'Discuss DB scaling'],
-        followUpHints: ['Think about horizontal vs vertical scaling', 'Where would Redis fit in?'],
-        timeLimit: 120
-      }));
-    }
-    throw err;
+    console.error('Gemini generateQuestions error, falling back to local question bank:', err.message);
+    return getOfflineQuestions({ role, level, roundType, skills, count });
   }
+}
+
+// ─── Local Dynamic Fallback Engines ──────────────────────────────────────────
+
+/**
+ * Dynamic offline evaluation based on keywords, key points matching, and answer length.
+ */
+function getOfflineEvaluation({ question, answer, type, difficulty, expectedKeyPoints, hintsUsed }) {
+  const words = (answer || '').toLowerCase();
+  
+  let correctness = 15;
+  let depth = 14;
+  let communication = 16;
+  let examples = 12;
+
+  // 1. Length/depth adjustments
+  const wordCount = answer.trim().split(/\s+/).length;
+  if (wordCount > 100) {
+    depth += 4;
+    communication += 2;
+  } else if (wordCount > 50) {
+    depth += 2;
+  } else if (wordCount < 15) {
+    correctness = Math.max(5, correctness - 8);
+    depth = Math.max(5, depth - 8);
+    communication = Math.max(8, communication - 5);
+    examples = Math.max(2, examples - 8);
+  }
+
+  // 2. Expected key points matching
+  const matchedPoints = [];
+  const missedPoints = [];
+
+  (expectedKeyPoints || []).forEach(point => {
+    const terms = point.toLowerCase().split(/[\s/]+/);
+    const isMatched = terms.some(term => term.length > 3 && words.includes(term));
+    if (isMatched) {
+      matchedPoints.push(point);
+      correctness += 2;
+      depth += 1;
+    } else {
+      missedPoints.push(point);
+    }
+  });
+
+  // Cap sub-scores at 25
+  correctness = Math.min(25, correctness);
+  depth = Math.min(25, depth);
+  communication = Math.min(25, communication);
+  examples = Math.min(25, examples);
+
+  const hintPenalty = hintsUsed * 5;
+  const rawScore = (correctness + depth + communication + examples) - hintPenalty;
+  const score = Math.max(0, Math.min(100, rawScore));
+  
+  const band = score >= 85 ? 'Excellent' : score >= 65 ? 'Good' : score >= 40 ? 'Average' : 'Needs Improvement';
+
+  // 3. Dynamic feedback generation
+  const strengths = [];
+  if (matchedPoints.length > 0) {
+    strengths.push(`Addressed key areas: ${matchedPoints.slice(0, 2).join(', ')}.`);
+  }
+  if (wordCount >= 45) {
+    strengths.push("Provided a well-structured and detailed explanation.");
+  } else {
+    strengths.push("Direct response structure.");
+  }
+
+  const improvements = [];
+  if (missedPoints.length > 0) {
+    improvements.push(`Address additional facets: ${missedPoints.slice(0, 2).join(', ')}.`);
+  }
+  if (wordCount < 30) {
+    improvements.push("Elaborate further to showcase technical depth and context.");
+  }
+  if (hintsUsed > 0) {
+    improvements.push("Try to solve complex questions with fewer hints.");
+  }
+
+  const pointsStr = expectedKeyPoints && expectedKeyPoints.length > 0 
+    ? `An optimal response would cover: ${expectedKeyPoints.join(', ')}.`
+    : "An optimal response would include specific examples, cover potential trade-offs, and outline a structured solution.";
+
+  const feedback = `[LOCAL EVAL] You provided a ${band.toLowerCase()} response for this ${difficulty} question. ${
+    matchedPoints.length > 0 
+      ? `You successfully touched on key aspects like ${matchedPoints.join(', ')}.` 
+      : "Ensure you clearly define the core concept, discuss architectural trade-offs, and state assumptions."
+  }`;
+
+  return {
+    correctness,
+    depth,
+    communication,
+    examples,
+    score,
+    band,
+    feedback,
+    strengths,
+    improvements,
+    suggestedAnswer: `[LOCAL SUGGESTION] ${pointsStr}`
+  };
+}
+
+/**
+ * Dynamic offline session report generation.
+ */
+function getOfflineSessionFeedback({ role, level, questions, overallScore }) {
+  const allStrengths = [];
+  const allImprovements = [];
+  
+  questions.forEach(q => {
+    if (q.evaluation?.strengths) allStrengths.push(...q.evaluation.strengths);
+    if (q.evaluation?.improvements) allImprovements.push(...q.evaluation.improvements);
+  });
+
+  const uniqueStrengths = [...new Set(allStrengths)].slice(0, 3);
+  const uniqueGaps = [...new Set(allImprovements)].slice(0, 3);
+
+  if (uniqueStrengths.length < 2) {
+    uniqueStrengths.push("Consistent effort through the interview stages.", "Clear verbal structure.");
+  }
+  if (uniqueGaps.length < 2) {
+    uniqueGaps.push("Deepen technical exploration of edge cases.", "Provide more concrete metrics in behavioral stories.");
+  }
+
+  const avgCorrectness = Math.round((questions.reduce((sum, q) => sum + (q.evaluation?.correctness ?? 15), 0) / questions.length) * 4);
+  const avgDepth = Math.round((questions.reduce((sum, q) => sum + (q.evaluation?.depth ?? 15), 0) / questions.length) * 4);
+  const avgComm = Math.round((questions.reduce((sum, q) => sum + (q.evaluation?.communication ?? 15), 0) / questions.length) * 4);
+  const avgExamples = Math.round((questions.reduce((sum, q) => sum + (q.evaluation?.examples ?? 15), 0) / questions.length) * 4);
+
+  const problemSolving = Math.min(100, Math.max(30, Math.round((avgCorrectness + avgDepth) / 2)));
+  const communication = Math.min(100, Math.max(30, avgComm));
+  const technicalDepth = Math.min(100, Math.max(30, avgDepth));
+  const codeQuality = Math.min(100, Math.max(30, Math.round((avgCorrectness + avgExamples) / 2)));
+  const systemThinking = Math.min(100, Math.max(30, Math.round((avgDepth + avgExamples) / 2)));
+  const behavioralFit = Math.min(100, Math.max(30, Math.round((avgComm + avgExamples) / 2)));
+
+  const hiringRecommendation = overallScore >= 85 ? 'Strong Hire' : overallScore >= 68 ? 'Hire' : overallScore >= 45 ? 'Borderline' : 'No Hire';
+
+  const executiveSummary = `[LOCAL REPORT] The candidate completed the ${level}-level ${role} interview session with an overall score of ${overallScore}/100. They demonstrated solid capabilities in: ${uniqueStrengths.join(', ').toLowerCase()}. However, there are opportunities for improvement in: ${uniqueGaps.join(', ').toLowerCase()}.`;
+
+  return {
+    executiveSummary,
+    topStrengths: uniqueStrengths,
+    criticalGaps: uniqueGaps,
+    studyPlan: [
+      {
+        topic: "Core Foundations & Architectural Trade-offs",
+        priority: overallScore < 70 ? "high" : "medium",
+        resources: ["System Design Primer", "Tech Blogs (Netflix, Uber)"]
+      },
+      {
+        topic: "Structured Communication (STAR/PREP)",
+        priority: "medium",
+        resources: ["Behavioral Interview Prep Guide"]
+      }
+    ],
+    hiringRecommendation,
+    skillRadar: {
+      problemSolving,
+      communication,
+      technicalDepth,
+      codeQuality,
+      systemThinking,
+      behavioralFit
+    }
+  };
 }
 
 // ─── Answer Evaluation Engine ─────────────────────────────────────────────────
@@ -140,19 +298,8 @@ Return ONLY valid JSON (no markdown):
 
     return { ...parsed, score, band };
   } catch (err) {
-    if (err.message.includes('429') || err.message.includes('exhausted')) {
-      console.log('Returning mock evaluation due to rate limit.');
-      return {
-        correctness: 20, depth: 18, communication: 22, examples: 15,
-        score: 75,
-        band: 'Good',
-        feedback: '[MOCK EVALUATION] Good approach, but could dive deeper into edge cases.',
-        strengths: ['Clear communication', 'Correct basic approach'],
-        improvements: ['Include more concrete examples', 'Discuss scalability limits'],
-        suggestedAnswer: '[MOCK] A complete answer would discuss horizontal scaling strategies and specific caching patterns like write-through vs write-behind.'
-      };
-    }
-    throw err;
+    console.error('Gemini evaluateAnswer error, falling back to local evaluation:', err.message);
+    return getOfflineEvaluation({ question, answer, type, difficulty, expectedKeyPoints, hintsUsed });
   }
 }
 
@@ -216,27 +363,8 @@ Generate a comprehensive feedback report. Return ONLY valid JSON:
     if (!jsonMatch) throw new Error('Session feedback JSON parse failed');
     return JSON.parse(jsonMatch[0]);
   } catch (err) {
-    if (err.message.includes('429') || err.message.includes('exhausted')) {
-      console.log('Returning mock session feedback due to rate limit.');
-      return {
-        executiveSummary: "[MOCK REPORT] The candidate demonstrated solid fundamental knowledge but lacked depth in advanced system design. Overall communication was clear, but examples were sometimes too generic.",
-        topStrengths: ["Clear communication", "Strong foundational knowledge"],
-        criticalGaps: ["Advanced system architecture", "Concrete code examples"],
-        studyPlan: [
-          { topic: "System Design Patterns", priority: "high", resources: ["Designing Data-Intensive Applications", "Grokking the System Design Interview"] }
-        ],
-        hiringRecommendation: "Hire",
-        skillRadar: {
-          problemSolving: 75,
-          communication: 85,
-          technicalDepth: 70,
-          codeQuality: 80,
-          systemThinking: 65,
-          behavioralFit: 90
-        }
-      };
-    }
-    throw err;
+    console.error('Gemini generateSessionFeedback error, falling back to local feedback:', err.message);
+    return getOfflineSessionFeedback({ role, level, questions, overallScore });
   }
 }
 
@@ -257,11 +385,8 @@ ${resumeText.substring(0, 4000)}`;
     if (!jsonMatch) return [];
     return JSON.parse(jsonMatch[0]);
   } catch (err) {
-    if (err.message.includes('429') || err.message.includes('exhausted')) {
-      console.log('Returning mock skills due to rate limit.');
-      return ['JavaScript', 'React', 'Node.js', 'System Design'];
-    }
-    return [];
+    console.error('Gemini extractSkillsFromResume error, falling back to local list:', err.message);
+    return ['JavaScript', 'React', 'Node.js', 'System Design'];
   }
 }
 
@@ -294,18 +419,15 @@ Return ONLY valid JSON matching this schema exactly (no markdown):
     if (!jsonMatch) throw new Error('AI did not return valid JSON');
     return JSON.parse(jsonMatch[0]);
   } catch (err) {
-    if (err.message.includes('429') || err.message.includes('exhausted')) {
-      console.log('Returning mock generated resume due to rate limit.');
-      return {
-        personal: { name: "AI Generated Professional", email: "professional@ai.com", phone: "555-0100", location: "San Francisco, CA", linkedin: "linkedin.com/in/ai-gen", github: "github.com/ai-gen" },
-        summary: "Highly motivated and results-driven professional generated by AI fallback. Experienced in delivering scalable solutions and optimizing complex systems.",
-        experience: [{ company: "MockTech Inc", role: "Senior Developer", date: "2020 - Present", bullets: "• Architected a highly scalable microservices platform.\\n• Improved deployment times by 45% using CI/CD pipelines." }],
-        education: [{ school: "University of Tech", degree: "B.S. Computer Science", date: "2016 - 2020", gpa: "3.9" }],
-        skills: "JavaScript, React, Node.js, Python, AWS, Docker",
-        projects: [{ name: "AI Interview Platform", desc: "• Built a real-time web application using React and Express.\\n• Integrated Google Gemini API for dynamic generation." }]
-      };
-    }
-    throw err;
+    console.error('Gemini buildResumeWithAI error, falling back to local builder:', err.message);
+    return {
+      personal: { name: "AI Generated Professional", email: "professional@ai.com", phone: "555-0100", location: "San Francisco, CA", linkedin: "linkedin.com/in/ai-gen", github: "github.com/ai-gen" },
+      summary: "Highly motivated and results-driven professional generated by AI fallback. Experienced in delivering scalable solutions and optimizing complex systems.",
+      experience: [{ company: "MockTech Inc", role: "Senior Developer", date: "2020 - Present", bullets: "• Architected a highly scalable microservices platform.\\n• Improved deployment times by 45% using CI/CD pipelines." }],
+      education: [{ school: "University of Tech", degree: "B.S. Computer Science", date: "2016 - 2020", gpa: "3.9" }],
+      skills: "JavaScript, React, Node.js, Python, AWS, Docker",
+      projects: [{ name: "AI Interview Platform", desc: "• Built a real-time web application using React and Express.\\n• Integrated Google Gemini API for dynamic generation." }]
+    };
   }
 }
 
