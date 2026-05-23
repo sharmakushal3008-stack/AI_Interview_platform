@@ -1,3 +1,9 @@
+const dns = require('dns');
+try {
+  dns.setServers(['8.8.8.8', '8.8.4.4', '1.1.1.1']);
+} catch (e) {
+  console.warn('⚠️ Failed to set custom DNS servers, using system default:', e.message);
+}
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
