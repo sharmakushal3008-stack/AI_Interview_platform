@@ -485,3 +485,159 @@ h1, h2, h3, h4, h5, h6 {
     box-shadow: none !important;
   }
 }
+
+/* ─── Premium IDE Workspace Styles ─── */
+.ide-container {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+  margin-bottom: 20px;
+}
+
+.ide-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ide-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ide-select {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  outline: none;
+  cursor: pointer;
+  width: auto;
+}
+
+.ide-select:focus {
+  border-color: var(--accent-blue);
+}
+
+.editor-workspace {
+  display: flex;
+  background: #0d0d11;
+  min-height: 250px;
+  max-height: 400px;
+  overflow: hidden;
+}
+
+.line-numbers-gutter {
+  width: 48px;
+  background: #08080b;
+  border-right: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 12px 8px;
+  text-align: right;
+  user-select: none;
+  overflow-y: hidden;
+}
+
+.code-textarea-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.code-textarea {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  color: #f8f8f2;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 12px 16px;
+  border: none;
+  outline: none;
+  resize: none;
+  tab-size: 4;
+  white-space: pre;
+  overflow: auto;
+  caret-color: #fff;
+}
+
+.console-pane {
+  background: #08080a;
+  border-top: 1px solid var(--border-subtle);
+  padding: 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.console-title {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.console-log-box {
+  background: #030305;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  max-height: 150px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+.console-log-line {
+  margin-bottom: 4px;
+}
+
+.console-log-line.error {
+  color: var(--danger);
+}
+
+.console-log-line.success {
+  color: var(--success);
+}
+
+.test-results-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.test-results-table th, .test-results-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.test-results-table th {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.test-results-table tr:last-child td {
+  border-bottom: none;
+}

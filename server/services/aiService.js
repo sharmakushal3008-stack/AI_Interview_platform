@@ -1,5 +1,5 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { getOfflineQuestions } = require('./questionBank');
+const { getOfflineQuestions, CODING_QUESTIONS } = require('./questionBank');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
@@ -10,7 +10,7 @@ const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
  * Generate interview questions based on resume skills + role.
  * Uses a structured JSON prompt so output is machine-parseable, not just text.
  */
-async function generateQuestions({ role, level, roundType, skills, count = 8 }) {
+async function generateQuestions({ role, level, roundType, skills, count = 8, knowledgeChunks = [] }) {
   const skillList = skills.length > 0 ? skills.join(', ') : 'general software engineering';
   const levelGuide = {
     junior: 'foundational concepts, basic problem-solving, learning mindset',
@@ -27,10 +27,31 @@ async function generateQuestions({ role, level, roundType, skills, count = 8 }) 
     mixed: 'mix of behavioral, technical, and one coding problem',
   };
 
+  let RAGPrompt = '';
+  if (knowledgeChunks && knowledgeChunks.length > 0) {
+    const contextBlocks = knowledgeChunks.map((chunk, idx) => {
+      const text = chunk.text || chunk;
+      const src = chunk.source || 'Knowledge Base';
+      return `[Chunk ${idx + 1} - Source: ${src}]:\n${text}`;
+    }).join('\n\n');
+
+    RAGPrompt = `
+REFERENCE MATERIAL / KNOWLEDGE BASE:
+Use the following text chunks retrieved from uploaded files to construct specific questions. Ground your questions in these guidelines, technical specifications, or rubrics:
+${contextBlocks}
+
+Instructions for RAG:
+- Construct questions that specifically test the candidate on the concepts, processes, rules, or system details contained in the Reference Material.
+- Ground the question's 'expectedKeyPoints' in the facts from the Reference Material.
+- Add a "contextChunks" key inside each question JSON object containing a string array of retrieved chunks that are relevant to answering/evaluating that question.
+`;
+  }
+
   const prompt = `You are an expert ${role} interviewer at a top tech company.
 Generate exactly ${count} interview questions for a ${level}-level candidate.
 Round type: ${roundType} — ${roundGuides[roundType] || roundGuides.mixed}
 Candidate's skills from resume: ${skillList}
+${RAGPrompt}
 
 Difficulty distribution:
 - ${Math.floor(count * 0.3)} easy questions
@@ -45,7 +66,8 @@ Return ONLY a valid JSON array. No markdown, no explanation. Schema:
     "difficulty": "easy|medium|hard",
     "expectedKeyPoints": ["point1", "point2"],
     "followUpHints": ["hint if stuck 1", "hint if stuck 2", "hint if stuck 3"],
-    "timeLimit": 120
+    "timeLimit": 120,
+    "contextChunks": ["relevant reference material chunk 1", "relevant reference material chunk 2"]
   }
 ]`;
 
@@ -57,8 +79,26 @@ Return ONLY a valid JSON array. No markdown, no explanation. Schema:
     return JSON.parse(jsonMatch[0]);
   } catch (err) {
     console.error('Gemini generateQuestions error, falling back to local question bank:', err.message);
-    return getOfflineQuestions({ role, level, roundType, skills, count });
+    const offline = getOfflineQuestions({ role, level, roundType, skills, count });
+    return offline.map(q => ({ ...q, contextChunks: [] }));
   }
+}
+
+// Helper to look up the reference solution for a coding question
+function getReferenceSolutionForQuestion(questionText, language) {
+  if (!CODING_QUESTIONS || !questionText) return '';
+  const qText = questionText.toLowerCase();
+  const codingQ = CODING_QUESTIONS.find(cq => {
+    if (cq.question === questionText) return true;
+    if (cq.functionName && qText.includes(cq.functionName.toLowerCase())) return true;
+    return false;
+  });
+  
+  if (codingQ && codingQ.referenceSolution) {
+    const lang = (language || 'javascript').toLowerCase();
+    return codingQ.referenceSolution[lang] || codingQ.referenceSolution['javascript'] || '';
+  }
+  return '';
 }
 
 // ─── Local Dynamic Fallback Engines ──────────────────────────────────────────
@@ -66,7 +106,7 @@ Return ONLY a valid JSON array. No markdown, no explanation. Schema:
 /**
  * Dynamic offline evaluation based on keywords, key points matching, and answer length.
  */
-function getOfflineEvaluation({ question, answer, type, difficulty, expectedKeyPoints, hintsUsed }) {
+function getOfflineEvaluation({ question, answer, type, difficulty, expectedKeyPoints, hintsUsed, starterCode, language }) {
   const words = (answer || '').toLowerCase();
   
   let correctness = 15;
@@ -110,13 +150,106 @@ function getOfflineEvaluation({ question, answer, type, difficulty, expectedKeyP
   communication = Math.min(25, communication);
   examples = Math.min(25, examples);
 
+  // 3. Local grammar check matching to simulate Grammarly highlights offline
+  const localMistakes = [
+    // Grammar & Typos
+    { regex: /\bwe\s+uses\b/gi, match: "we uses", correction: "we use", explanation: "Subject-verb agreement error. Fixing this raises your Communication score." },
+    { regex: /\bi\s+does\b/gi, match: "i does", correction: "i do", explanation: "Subject-verb agreement error. Fixing this raises your Communication score." },
+    { regex: /\bteh\b/gi, match: "teh", correction: "the", explanation: "Spelling typo. Fixing this improves your Communication score." },
+    { regex: /\bdont\b/gi, match: "dont", correction: "don't", explanation: "Missing apostrophe. Fixing this improves your Communication score." },
+    { regex: /\bcant\b/gi, match: "cant", correction: "can't", explanation: "Missing apostrophe. Fixing this improves your Communication score." },
+    { regex: /\bit\s+work\b/gi, match: "it work", correction: "it works", explanation: "Subject-verb agreement: third-person singular verb required." },
+    // Technical Rephrasings (showing how score improves)
+    { regex: /\bused\s+a\s+database\b/gi, match: "used a database", correction: "implemented an index-optimized database schema (e.g., PostgreSQL or MongoDB)", explanation: "Weak technical description. Specifying the storage choice and optimization strategy demonstrates architectural awareness, raising your Technical Depth score by 3 points." },
+    { regex: /\bmake\s+it\s+fast\b/gi, match: "make it fast", correction: "optimize network latency and implement caching (e.g., Redis)", explanation: "Vague phrasing. Expressing speed improvements as concrete latency optimizations and caching strategies boosts your Correctness and Technical Depth scores by 4 points." },
+    { regex: /\bwrite\s+code\b/gi, match: "write code", correction: "architect modular, clean, and scalable components", explanation: "General wording. Specifying modular design principles demonstrates software engineering craftsmanship, which increases your Code Quality score by 3 points." },
+    { regex: /\btest\b/gi, match: "test", correction: "conduct automated unit and integration tests using Jest or Cypress", explanation: "Vague testing process. Detailing automated testing strategies shows production maturity and raises your Practical Examples score by 3 points." }
+  ];
+
+  const inlineCorrections = [];
+  localMistakes.forEach(item => {
+    const matches = answer.match(item.regex);
+    if (matches) {
+      matches.forEach(m => {
+        if (!inlineCorrections.some(c => c.originalText === m)) {
+          inlineCorrections.push({
+            originalText: m,
+            correction: item.correction,
+            explanation: item.explanation
+          });
+        }
+      });
+    }
+  });
+
+  if (type === 'coding') {
+    // 1. Check for unbalanced braces (curly braces)
+    const openBraces = (answer.match(/\{/g) || []).length;
+    const closeBraces = (answer.match(/\}/g) || []).length;
+    if (openBraces !== closeBraces) {
+      inlineCorrections.push({
+        originalText: answer.substring(Math.max(0, answer.length - 25)), // target last segment
+        correction: "Ensure all curly braces are balanced.",
+        explanation: `Syntax Error: Unbalanced curly braces. You have ${openBraces} open '{' and ${closeBraces} close '}'. Balanced braces are required for code compilation, improving your Code Quality and Correctness.`
+      });
+      correctness = Math.max(5, correctness - 8);
+    }
+
+    // 2. Check for missing return keyword
+    if (!/\breturn\b/i.test(answer)) {
+      inlineCorrections.push({
+        originalText: answer.split(/[\r\n]+/).pop() || answer, // Target final line
+        correction: "Add a return statement.",
+        explanation: "Logical Error: The function does not appear to return a value. In data structures and algorithms rounds, your code must return the computed output. Adding a return statement increases your Correctness score."
+      });
+      correctness = Math.max(5, correctness - 6);
+    }
+
+    // 3. Check for division by zero pattern
+    if (/\/0\b/g.test(answer)) {
+      inlineCorrections.push({
+        originalText: "/0",
+        correction: "/ [non-zero value]",
+        explanation: "Arithmetic Warning: Potential division by zero. This will result in infinity, NaN, or a runtime error. Correcting this demonstrates solid engineering detail, raising Tech Depth by 3 points."
+      });
+      depth = Math.max(5, depth - 4);
+    }
+
+    // 4. Check for infinite loop pattern
+    if (/while\s*\(\s*true\s*\)/i.test(answer) && !/\bbreak\b/i.test(answer)) {
+      inlineCorrections.push({
+        originalText: "while(true)",
+        correction: "while (condition) or include 'break'",
+        explanation: "Logical Error: Detected while(true) loop without any apparent exit condition ('break'). This will crash execution. Fixing this raises Correctness and Tech Depth scores."
+      });
+      correctness = Math.max(5, correctness - 7);
+      depth = Math.max(5, depth - 5);
+    }
+  }
+
+  // Calculate score with deterministic pseudo-random variance based on answer features
   const hintPenalty = hintsUsed * 5;
-  const rawScore = (correctness + depth + communication + examples) - hintPenalty;
-  const score = Math.max(0, Math.min(100, rawScore));
+  const baseScore = (correctness + depth + communication + examples) - hintPenalty;
   
+  // Calculate a dynamic variance (from -6 to +6) so scores aren't identical
+  const lengthFactor = Math.min(6, Math.floor(answer.length / 80));
+  const pseudoRandom = Math.floor(Math.sin(answer.length || 1) * 5); // deterministically fluctuates
+  const errorPenalty = inlineCorrections.length * 3;
+  
+  let score = Math.max(0, Math.min(100, baseScore + lengthFactor + pseudoRandom - errorPenalty));
   const band = score >= 85 ? 'Excellent' : score >= 65 ? 'Good' : score >= 40 ? 'Average' : 'Needs Improvement';
 
-  // 3. Dynamic feedback generation
+  // 4. Generate dynamic offline refactoring by replacing detected errors
+  let refactoredAnswer = answer;
+  localMistakes.forEach(item => {
+    refactoredAnswer = refactoredAnswer.replace(item.regex, item.correction);
+  });
+  if (refactoredAnswer.trim()) {
+    refactoredAnswer = refactoredAnswer.trim();
+    refactoredAnswer = refactoredAnswer.charAt(0).toUpperCase() + refactoredAnswer.slice(1);
+  }
+
+  // 5. Dynamic feedback generation
   const strengths = [];
   if (matchedPoints.length > 0) {
     strengths.push(`Addressed key areas: ${matchedPoints.slice(0, 2).join(', ')}.`);
@@ -134,8 +267,8 @@ function getOfflineEvaluation({ question, answer, type, difficulty, expectedKeyP
   if (wordCount < 30) {
     improvements.push("Elaborate further to showcase technical depth and context.");
   }
-  if (hintsUsed > 0) {
-    improvements.push("Try to solve complex questions with fewer hints.");
+  if (inlineCorrections.length > 0) {
+    improvements.push("Fix phrasing and grammatical errors to improve communication score.");
   }
 
   const pointsStr = expectedKeyPoints && expectedKeyPoints.length > 0 
@@ -146,7 +279,16 @@ function getOfflineEvaluation({ question, answer, type, difficulty, expectedKeyP
     matchedPoints.length > 0 
       ? `You successfully touched on key aspects like ${matchedPoints.join(', ')}.` 
       : "Ensure you clearly define the core concept, discuss architectural trade-offs, and state assumptions."
-  }`;
+  } ${inlineCorrections.length > 0 ? `We detected ${inlineCorrections.length} phrasing issue(s) that could be polished.` : ""}`;
+
+  let resolvedSuggested = '';
+  if (type === 'coding') {
+    const refSolution = getReferenceSolutionForQuestion(question, language);
+    if (refSolution) resolvedSuggested = refSolution;
+    else resolvedSuggested = `[LOCAL SUGGESTION] ${pointsStr}`;
+  } else {
+    resolvedSuggested = `[LOCAL SUGGESTION] ${pointsStr}`;
+  }
 
   return {
     correctness,
@@ -158,7 +300,9 @@ function getOfflineEvaluation({ question, answer, type, difficulty, expectedKeyP
     feedback,
     strengths,
     improvements,
-    suggestedAnswer: `[LOCAL SUGGESTION] ${pointsStr}`
+    suggestedAnswer: resolvedSuggested,
+    inlineCorrections,
+    refactoredAnswer
   };
 }
 
@@ -234,16 +378,41 @@ function getOfflineSessionFeedback({ role, level, questions, overallScore }) {
  * Multi-axis rubric evaluation — not just "good/bad" but a structured score.
  * Axes: correctness, depth, communication, examples (25pts each = 100 total)
  */
-async function evaluateAnswer({ question, answer, type, difficulty, expectedKeyPoints, hintsUsed }) {
-  if (!answer || answer.trim().length < 10) {
+async function evaluateAnswer({ question, answer, type, difficulty, expectedKeyPoints, hintsUsed, contextChunks = [], starterCode, language }) {
+  let isBoilerplate = false;
+  const normalizedAnswer = (answer || '').replace(/\s+/g, '');
+  
+  if (type === 'coding' && starterCode) {
+    if (!answer || answer.trim().length === 0) {
+      isBoilerplate = true;
+    } else {
+      for (const langKey of Object.keys(starterCode)) {
+        const normalizedStarter = (starterCode[langKey] || '').replace(/\s+/g, '');
+        if (normalizedAnswer === normalizedStarter) {
+          isBoilerplate = true;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!answer || answer.trim().length < 10 || isBoilerplate) {
+    const feedback = isBoilerplate
+      ? 'No answer written. Unmodified starter/boilerplate code was submitted.'
+      : 'No meaningful answer provided.';
     return {
       score: 0,
-      correctness: 0, depth: 0, communication: 0, examples: 0,
-      feedback: 'No meaningful answer provided.',
+      correctness: 0,
+      depth: 0,
+      communication: 0,
+      examples: 0,
+      feedback,
       strengths: [],
       improvements: ['Provide a detailed answer to score points.'],
-      suggestedAnswer: '',
+      suggestedAnswer: type === 'coding' ? getReferenceSolutionForQuestion(question, language) : '',
       band: 'Needs Improvement',
+      inlineCorrections: [],
+      refactoredAnswer: '',
     };
   }
 
@@ -256,11 +425,26 @@ async function evaluateAnswer({ question, answer, type, difficulty, expectedKeyP
     hr: 'Evaluate clarity, self-awareness, cultural fit signals.',
   };
 
+  let contextSection = '';
+  if (contextChunks && contextChunks.length > 0) {
+    const contextText = contextChunks.join('\n\n');
+    contextSection = `
+REFERENCE CONTEXT / SOURCE OF TRUTH:
+The candidate's answer should align with the rules, patterns, or facts in the following retrieved reference context:
+${contextText}
+
+Evaluation instructions regarding reference context:
+- Grade the candidate strictly against this reference context. If their answer contradicts the reference context, deduct correctness and depth points.
+- If the question was generated based on this context, ensure their answer matches the specifications.
+`;
+  }
+
   const prompt = `You are a strict but fair technical interviewer evaluating a ${difficulty}-level ${type} interview answer.
 
 QUESTION: ${question}
 EXPECTED KEY POINTS: ${(expectedKeyPoints || []).join(', ')}
 CANDIDATE ANSWER: ${answer}
+${contextSection}
 
 Evaluation guide: ${typeGuide[type] || typeGuide.technical}
 
@@ -272,6 +456,14 @@ Score each axis 0-25 (total = 100):
 
 Hints used: ${hintsUsed} (mentally note this reduces max score by ${hintPenalty} points)
 
+Evaluate the candidate's answer for concrete mistakes AND rephrasing opportunities:
+- Phrasing, syntax, or grammatical errors.
+- Factual or technical inaccuracies.
+- Vague, weak, or shallow assertions. Locate sentences or phrases that lack engineering depth and provide a rephrased version that utilizes professional terminology, trade-offs, or concrete tools.
+- For each correction or rephrasing, explain in detail how making this change would raise their score (e.g., 'Rephrasing this to mention index optimizations on the query path shows performance thinking and would increase your depth score by 3 points').
+
+Compile exact inline corrections and rephrasings (matching the exact case-sensitive substring/originalText) and a fully polished, refactored version of the candidate's response.
+
 Return ONLY valid JSON (no markdown):
 {
   "correctness": number,
@@ -281,7 +473,15 @@ Return ONLY valid JSON (no markdown):
   "feedback": "2-3 sentence overall feedback",
   "strengths": ["strength1", "strength2"],
   "improvements": ["improvement1", "improvement2"],
-  "suggestedAnswer": "A model answer or key points the candidate missed (2-3 sentences)"
+  "suggestedAnswer": "A model answer or key points the candidate missed (2-3 sentences)",
+  "inlineCorrections": [
+    {
+      "originalText": "EXACT case-sensitive substring from candidate answer to replace or rephrase",
+      "correction": "the suggested correction or technically polished rephrasing",
+      "explanation": "brief critique explaining the weakness and details on how this rephrasing improves their score (e.g., adds 3-4 points to Tech Depth)"
+    }
+  ],
+  "refactoredAnswer": "A polished, structured, and grammatically flawless version of the candidate's response in their voice, fixing all mistakes and rephrasing weak lines"
 }`;
 
   try {
@@ -291,6 +491,14 @@ Return ONLY valid JSON (no markdown):
     if (!jsonMatch) throw new Error('Evaluation JSON parse failed');
 
     const parsed = JSON.parse(jsonMatch[0]);
+    
+    if (type === 'coding') {
+      const refSol = getReferenceSolutionForQuestion(question, language);
+      if (refSol) {
+        parsed.suggestedAnswer = refSol;
+      }
+    }
+    
     const rawScore = (parsed.correctness + parsed.depth + parsed.communication + parsed.examples) - hintPenalty;
     const score = Math.max(0, Math.min(100, rawScore));
 
@@ -299,7 +507,7 @@ Return ONLY valid JSON (no markdown):
     return { ...parsed, score, band };
   } catch (err) {
     console.error('Gemini evaluateAnswer error, falling back to local evaluation:', err.message);
-    return getOfflineEvaluation({ question, answer, type, difficulty, expectedKeyPoints, hintsUsed });
+    return getOfflineEvaluation({ question, answer, type, difficulty, expectedKeyPoints, hintsUsed, starterCode, language });
   }
 }
 

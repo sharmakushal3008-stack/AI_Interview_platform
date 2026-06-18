@@ -2,12 +2,13 @@ const express = require('express');
 const router = express.Router();
 const Session = require('../models/Session');
 const { evaluateAnswer, generateSessionFeedback, getNextDifficulty } = require('../services/aiService');
+const { queryKnowledgeChunks } = require('../services/ragService');
 
 // POST /api/interview/submit-answer
-// Evaluates an answer and updates session; returns score + next question difficulty
+// Evaluates an answer and updates session; returns score + next question difficulty and retrieved context chunks
 router.post('/submit-answer', async (req, res) => {
   try {
-    const { sessionId, questionId, answer, timeSpent } = req.body;
+    const { sessionId, questionId, answer, timeSpent, language } = req.body;
     if (!sessionId || !questionId) {
       return res.status(400).json({ error: 'sessionId and questionId required' });
     }
@@ -22,7 +23,27 @@ router.post('/submit-answer', async (req, res) => {
     q.timeSpent = timeSpent || 0;
     q.skipped = !answer || answer.trim().length < 5;
 
-    // Evaluate the answer using multi-axis rubric
+    // Retrieve RAG context chunks for this question
+    let combinedContextChunks = [...(q.contextChunks || [])];
+
+    // Perform a dynamic query on the session's overall knowledge chunks based on candidate response
+    if (session.knowledgeChunks && session.knowledgeChunks.length > 0) {
+      const searchResults = await queryKnowledgeChunks(
+        session.knowledgeChunks,
+        `${q.question} ${q.answer}`,
+        3
+      );
+      searchResults.forEach(chunk => {
+        if (!combinedContextChunks.includes(chunk.text)) {
+          combinedContextChunks.push(chunk.text);
+        }
+      });
+    }
+
+    // Save final combined context chunks in the question record
+    q.contextChunks = combinedContextChunks;
+
+    // Evaluate the answer using multi-axis rubric + injected context chunks
     const evaluation = await evaluateAnswer({
       question: q.question,
       answer: q.answer,
@@ -30,6 +51,9 @@ router.post('/submit-answer', async (req, res) => {
       difficulty: q.difficulty,
       expectedKeyPoints: q.evaluation?._expectedKeyPoints || [],
       hintsUsed: q.hintsUsed,
+      contextChunks: combinedContextChunks,
+      starterCode: q.starterCode,
+      language: language,
     });
 
     q.evaluation = {
@@ -57,9 +81,12 @@ router.post('/submit-answer', async (req, res) => {
         improvements: evaluation.improvements,
         suggestedAnswer: evaluation.suggestedAnswer,
         band: evaluation.band,
+        inlineCorrections: evaluation.inlineCorrections || [],
+        refactoredAnswer: evaluation.refactoredAnswer || '',
       },
       nextDifficulty,
       answeredCount: answeredQuestions.length + 1,
+      contextChunks: combinedContextChunks, // Provide to frontend for diagnostic inspection
     });
   } catch (err) {
     console.error('Submit answer error:', err);
@@ -127,6 +154,9 @@ router.post('/complete', async (req, res) => {
         strengths: q.evaluation.strengths,
         improvements: q.evaluation.improvements,
         suggestedAnswer: q.evaluation.suggestedAnswer,
+        inlineCorrections: q.evaluation.inlineCorrections || [],
+        refactoredAnswer: q.evaluation.refactoredAnswer || '',
+        answer: q.answer || '',
         hintsUsed: q.hintsUsed,
         timeSpent: q.timeSpent,
       })),

@@ -5,6 +5,9 @@ const QuestionAnswerSchema = new mongoose.Schema({
   type: { type: String, enum: ['behavioral', 'technical', 'coding', 'system_design', 'hr'] },
   difficulty: { type: String, enum: ['easy', 'medium', 'hard'] },
   answer: String,
+  starterCode: mongoose.Schema.Types.Mixed, // Map of language -> starter code string
+  functionName: String,
+  testCases: [mongoose.Schema.Types.Mixed], // Array of input/expected pairs
   evaluation: {
     score: Number,           // 0-100
     correctness: Number,     // 0-25
@@ -15,10 +18,17 @@ const QuestionAnswerSchema = new mongoose.Schema({
     strengths: [String],
     improvements: [String],
     suggestedAnswer: String,
+    inlineCorrections: [{
+      originalText: String,
+      correction: String,
+      explanation: String
+    }],
+    refactoredAnswer: String,
   },
   hintsUsed: { type: Number, default: 0 },
   timeSpent: Number,         // seconds
   skipped: { type: Boolean, default: false },
+  contextChunks: [String],   // The context chunks retrieved and used to generate/evaluate this question
 });
 
 const SessionSchema = new mongoose.Schema({
@@ -29,6 +39,11 @@ const SessionSchema = new mongoose.Schema({
   resumeText: String,
   extractedSkills: [String],
   questions: [QuestionAnswerSchema],
+  knowledgeChunks: [{
+    text: String,
+    embedding: [Number],     // 768-dim embedding values
+    source: String,          // filename or 'user-paste'
+  }],
   overallScore: Number,
   band: { type: String, enum: ['Excellent', 'Good', 'Average', 'Needs Improvement'] },
   skillRadar: {
@@ -54,9 +69,13 @@ if (process.env.MONGODB_URI) {
       Object.assign(this, data);
       this._id = Date.now().toString() + Math.random();
       if (!this.questions) this.questions = [];
+      if (!this.knowledgeChunks) this.knowledgeChunks = [];
       // Mock mongoose subdocument array method
       this.questions.id = (id) => this.questions.find(q => q._id === id || q._id?.toString() === id?.toString());
-      this.questions.forEach(q => { if (!q._id) q._id = Date.now().toString() + Math.random().toString(); });
+      this.questions.forEach(q => { 
+        if (!q._id) q._id = Date.now().toString() + Math.random().toString(); 
+        if (!q.contextChunks) q.contextChunks = [];
+      });
     }
     async save() {
       const idx = store.findIndex(s => s.sessionId === this.sessionId);

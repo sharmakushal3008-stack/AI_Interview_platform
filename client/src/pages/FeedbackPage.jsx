@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useInterview } from '../context/InterviewContext';
 import { RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer, Tooltip } from 'recharts';
-import { Award, Target, AlertTriangle, CheckCircle2, ChevronRight, BarChart3, LayoutDashboard, Flag } from 'lucide-react';
+import { Award, Target, AlertTriangle, CheckCircle2, ChevronRight, BarChart3, LayoutDashboard, Flag, Layers } from 'lucide-react';
 
 export default function FeedbackPage() {
   const navigate = useNavigate();
@@ -158,28 +158,113 @@ export default function FeedbackPage() {
         {questionBreakdown?.length > 0 && (
           <div className="card mb-10 slide-up" style={{ animationDelay: '0.6s' }}>
             <p className="flex items-center gap-2 text-text-tertiary mb-6" style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}><Award size={16} /> Granular Telemetry</p>
-            <div className="flex flex-col gap-3">
-              {questionBreakdown.map((q, i) => (
-                <details key={i} style={{ background: 'var(--bg-base)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-strong)', cursor: 'pointer' }}>
-                  <summary className="flex items-center gap-3" style={{ padding: '16px', listStyle: 'none', userSelect: 'none' }}>
-                    <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: q.score >= 70 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: q.score >= 70 ? 'var(--success)' : 'var(--danger)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem', fontWeight: 700, flexShrink: 0 }}>
-                      {q.score}
-                    </div>
-                    <span style={{ flex: 1, fontSize: '0.9rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>{q.question}</span>
-                    <span className="badge badge-outline" style={{ flexShrink: 0 }}>{q.type}</span>
-                  </summary>
-                  <div style={{ padding: '0 16px 16px 60px' }}>
-                    <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.7, marginBottom: '12px' }}>{q.feedback}</p>
-                    {q.suggestedAnswer && (
-                      <div style={{ background: 'var(--bg-elevated)', padding: '12px', borderRadius: '4px', borderLeft: '2px solid var(--accent-blue)' }}>
-                        <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginBottom: '4px', fontWeight: 600 }}>OPTIMAL RESPONSE</p>
-                        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{q.suggestedAnswer}</p>
+            
+            {(() => {
+              // Internal helper to render inline corrections highlight in the feedback summary
+              const renderAnswerWithHighlights = (ans, corrections) => {
+                if (!ans) return '';
+                if (!corrections || corrections.length === 0) return ans;
+                const sorted = [...corrections].sort((a, b) => b.originalText.length - a.originalText.length);
+                let highlighted = ans;
+                const map = {};
+                sorted.forEach((corr, idx) => {
+                  if (!corr.originalText) return;
+                  const escaped = corr.originalText.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+                  const regex = new RegExp(`(${escaped})`, 'gi');
+                  if (regex.test(highlighted)) {
+                    const placeholder = `__CORR_MARKER_${idx}__`;
+                    map[placeholder] = corr;
+                    highlighted = highlighted.replace(regex, placeholder);
+                  }
+                });
+                const parts = highlighted.split(/(__CORR_MARKER_\d+__)/g);
+                return parts.map((part, index) => {
+                  if (part.startsWith('__CORR_MARKER_') && part.endsWith('__')) {
+                    const corr = map[part];
+                    if (corr) {
+                      return (
+                        <span
+                          key={index}
+                          style={{
+                            borderBottom: '2px dashed var(--danger)',
+                            background: 'rgba(239, 68, 68, 0.06)',
+                            cursor: 'help',
+                            padding: '0 2px'
+                          }}
+                          title={`Critique: ${corr.explanation} (Suggested: "${corr.correction}")`}>
+                          {corr.originalText}
+                        </span>
+                      );
+                    }
+                  }
+                  return part;
+                });
+              };
+
+              return (
+                <div className="flex flex-col gap-3">
+                  {questionBreakdown.map((q, i) => (
+                    <details key={i} style={{ background: 'var(--bg-base)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-strong)', cursor: 'pointer' }}>
+                      <summary className="flex items-center gap-3" style={{ padding: '16px', listStyle: 'none', userSelect: 'none' }}>
+                        <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: q.score >= 70 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: q.score >= 70 ? 'var(--success)' : 'var(--danger)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem', fontWeight: 700, flexShrink: 0 }}>
+                          {q.score}
+                        </div>
+                        <span style={{ flex: 1, fontSize: '0.9rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>{q.question}</span>
+                        <span className="badge badge-outline" style={{ flexShrink: 0 }}>{q.type}</span>
+                      </summary>
+                      
+                      <div style={{ padding: '0 16px 16px 60px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        <p style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', lineHeight: 1.7, margin: 0, textAlign: 'left' }}>{q.feedback}</p>
+                        
+                        {/* Submitted Answer with Highlighted Mistakes */}
+                        {q.answer && (
+                          <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '12px 16px', textAlign: 'left' }}>
+                            <p style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '6px', letterSpacing: '0.05em' }}>Your Submitted Answer (Hover underlines for corrections)</p>
+                            <p style={{ fontSize: '0.9rem', color: 'var(--text-primary)', lineHeight: 1.7, margin: 0 }}>
+                              {renderAnswerWithHighlights(q.answer, q.inlineCorrections)}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* List of Corrections */}
+                        {q.inlineCorrections && q.inlineCorrections.length > 0 && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', textAlign: 'left' }}>
+                            <p style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', fontWeight: 600, margin: 0, letterSpacing: '0.05em' }}>Critique Details ({q.inlineCorrections.length})</p>
+                            {q.inlineCorrections.map((corr, idx) => (
+                              <div key={idx} style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '10px 14px', fontSize: '0.85rem' }}>
+                                <div className="flex gap-2" style={{ flexWrap: 'wrap', marginBottom: '4px' }}>
+                                  <span style={{ fontWeight: 600, color: 'var(--danger)', textDecoration: 'line-through' }}>"{corr.originalText}"</span>
+                                  <span style={{ fontWeight: 700, color: 'var(--success)' }}>➔ "{corr.correction}"</span>
+                                </div>
+                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{corr.explanation}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Polished Refactored Answer */}
+                        {q.refactoredAnswer && (
+                          <div style={{ background: 'rgba(16, 185, 129, 0.03)', border: '1px solid rgba(16, 185, 129, 0.15)', borderRadius: '4px', padding: '12px 16px', textAlign: 'left' }}>
+                            <p style={{ fontSize: '0.75rem', color: 'var(--success)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '6px', letterSpacing: '0.05em' }}>Refactored Polish (Perfect Phrasing)</p>
+                            <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.7, margin: 0, fontStyle: 'italic' }}>
+                              "{q.refactoredAnswer}"
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Suggested model key points */}
+                        {q.suggestedAnswer && (
+                          <div style={{ background: 'var(--bg-elevated)', padding: '12px', borderRadius: '4px', borderLeft: '2px solid var(--accent-blue)', textAlign: 'left' }}>
+                            <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginBottom: '4px', fontWeight: 600 }}>OPTIMAL MODEL ANSWER (KEY POINTS)</p>
+                            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0 }}>{q.suggestedAnswer}</p>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                </details>
-              ))}
-            </div>
+                    </details>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         )}
 

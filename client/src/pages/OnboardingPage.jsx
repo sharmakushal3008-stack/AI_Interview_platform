@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useInterview } from '../context/InterviewContext';
 import { startSession } from '../utils/api';
-import { UploadCloud, Code2, Server, Database, UserCheck, Shield, Layers, Layout, FileText, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { UploadCloud, Code2, Server, Database, UserCheck, Shield, Layers, Layout, FileText, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle, Loader2, Plus, Trash2 } from 'lucide-react';
 
 const ROLE_GROUPS = [
   { group: 'Software Engineering', icon: Code2, roles: ['Software Engineer', 'Frontend Engineer', 'Backend Engineer', 'Full Stack Engineer'] },
@@ -33,6 +33,8 @@ export default function OnboardingPage() {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState({ role: '', level: 'mid', roundType: 'technical' });
   const [resumeFile, setResumeFile] = useState(null);
+  const [referenceFiles, setReferenceFiles] = useState([]);
+  const [referenceText, setReferenceText] = useState('');
   const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -44,6 +46,34 @@ export default function OnboardingPage() {
     else setError('Invalid format. Please upload a PDF file.');
   }, []);
 
+  const handleRefFileChange = (e) => {
+    const files = Array.from(e.target.files);
+    const validFiles = files.filter(file => {
+      const isPdf = file.type === 'application/pdf';
+      const isTxt = file.name.endsWith('.txt');
+      const isMd = file.name.endsWith('.md');
+      if (!isPdf && !isTxt && !isMd) {
+        setError('Reference files must be PDF, TXT, or MD.');
+        return false;
+      }
+      return true;
+    });
+
+    setReferenceFiles(prev => {
+      const combined = [...prev, ...validFiles];
+      if (combined.length > 5) {
+        setError('Maximum 5 reference documents allowed.');
+        return combined.slice(0, 5);
+      }
+      setError('');
+      return combined;
+    });
+  };
+
+  const removeRefFile = (index) => {
+    setReferenceFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
   const handleStart = async () => {
     if (!form.role) { setError('Role is required.'); return; }
     setLoading(true); setError('');
@@ -53,6 +83,16 @@ export default function OnboardingPage() {
       fd.append('level', form.level);
       fd.append('roundType', form.roundType);
       if (resumeFile) fd.append('resume', resumeFile);
+      
+      if (referenceFiles.length > 0) {
+        referenceFiles.forEach(file => {
+          fd.append('referenceDocs', file);
+        });
+      }
+
+      if (referenceText.trim()) {
+        fd.append('referenceText', referenceText);
+      }
 
       const { data } = await startSession(fd);
       startInterview(data);
@@ -180,38 +220,91 @@ export default function OnboardingPage() {
           {/* Step 3 */}
           {step === 3 && (
             <div className="fade-in flex" style={{ flexDirection: 'column', gap: '24px' }}>
+              
+              {/* Resume Section */}
               <div>
-                <h2 style={{ fontSize: '1.25rem', marginBottom: '8px' }}>Context Injection (Optional)</h2>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '16px' }}>Provide your resume to ground the AI's questions in your actual work history.</p>
+                <h2 style={{ fontSize: '1.25rem', marginBottom: '4px' }}>1. Candidate Resume (Optional)</h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '12px' }}>Grounds questions and evaluations in your specific professional experiences.</p>
                 
                 <div className={`upload-zone ${dragOver ? 'drag-over' : ''}`}
                   onDragOver={e => { e.preventDefault(); setDragOver(true); }}
                   onDragLeave={() => setDragOver(false)}
-                  onDrop={handleDrop}>
+                  onDrop={handleDrop}
+                  style={{ minHeight: '130px', padding: '20px' }}>
                   <input type="file" accept=".pdf" onChange={e => setResumeFile(e.target.files[0])} />
-                  <div className="flex items-center justify-center" style={{ flexDirection: 'column', gap: '12px', pointerEvents: 'none' }}>
-                    {resumeFile ? <FileText size={48} color="var(--accent-blue)" /> : <UploadCloud size={48} color="var(--text-tertiary)" />}
+                  <div className="flex items-center justify-center" style={{ flexDirection: 'column', gap: '8px', pointerEvents: 'none' }}>
+                    {resumeFile ? <FileText size={36} color="var(--accent-blue)" /> : <UploadCloud size={36} color="var(--text-tertiary)" />}
                     {resumeFile ? (
                       <>
-                        <p style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{resumeFile.name}</p>
-                        <p style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)' }}>{(resumeFile.size / 1024).toFixed(0)} KB</p>
+                        <p style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.9rem' }}>{resumeFile.name}</p>
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>{(resumeFile.size / 1024).toFixed(0)} KB</p>
                       </>
                     ) : (
                       <>
-                        <p style={{ fontWeight: 500, color: 'var(--text-primary)' }}>Drag and drop PDF here</p>
-                        <p style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)' }}>Maximum 5MB</p>
+                        <p style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: '0.9rem' }}>Click or drag candidate resume PDF here</p>
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Maximum 5MB</p>
                       </>
                     )}
                   </div>
                 </div>
               </div>
 
+              {/* RAG Knowledge Base Section */}
+              <div>
+                <h2 style={{ fontSize: '1.25rem', marginBottom: '4px' }}>2. Knowledge Base & Reference Material (Optional)</h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '12px' }}>Provide job descriptions, coding rubrics, company guides, or system specs to customize questions and evaluations.</p>
+                
+                {/* Upload Files list */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
+                  <div className="flex justify-between items-center" style={{ background: 'var(--bg-base)', border: '1px dashed var(--border-strong)', borderRadius: 'var(--radius-sm)', padding: '12px 16px', position: 'relative' }}>
+                    <div className="flex items-center gap-2">
+                      <FileText size={18} className="text-secondary" />
+                      <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>Upload reference files (PDF, TXT, MD)</span>
+                    </div>
+                    <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+                      <Plus size={14} /> Add Files
+                      <input type="file" multiple accept=".pdf,.txt,.md" style={{ display: 'none' }} onChange={handleRefFileChange} />
+                    </label>
+                  </div>
+
+                  {referenceFiles.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)', padding: '12px', border: '1px solid var(--border-subtle)' }}>
+                      <p style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: '4px' }}>Indexed Reference Files ({referenceFiles.length}/5)</p>
+                      {referenceFiles.map((file, idx) => (
+                        <div key={idx} className="flex justify-between items-center" style={{ background: 'var(--bg-base)', borderRadius: '4px', padding: '6px 12px', border: '1px solid var(--border-subtle)' }}>
+                          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '80%' }}>{file.name}</span>
+                          <button className="btn btn-ghost btn-sm" style={{ padding: '4px', color: 'var(--danger)' }} onClick={() => removeRefFile(idx)}>
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Paste Text Area */}
+                <div className="form-group">
+                  <label className="form-label" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Or paste guidelines / job specs directly</label>
+                  <textarea 
+                    className="form-textarea" 
+                    placeholder="Example: Candidate must show familiarity with React 19 concurrent features. Grade strictly on code performance and SOLID principles..."
+                    style={{ minHeight: '100px', fontSize: '0.85rem', lineHeight: 1.6, background: 'var(--bg-base)' }}
+                    value={referenceText}
+                    onChange={e => setReferenceText(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* Summary and launch */}
               <div style={{ background: 'var(--bg-base)', borderRadius: 'var(--radius-md)', padding: '16px', border: '1px solid var(--border-subtle)' }}>
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Session Summary</p>
                 <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
                   <span className="badge badge-brand">{form.role}</span>
                   <span className="badge badge-outline">{form.level}</span>
                   <span className="badge badge-purple">{form.roundType}</span>
+                  {(referenceFiles.length > 0 || referenceText.trim()) && (
+                    <span className="badge badge-cyan">RAG Enabled ({referenceFiles.length} files + text)</span>
+                  )}
                 </div>
               </div>
 
@@ -220,7 +313,12 @@ export default function OnboardingPage() {
               <div className="flex gap-4 mt-4">
                 <button className="btn btn-secondary w-full" onClick={() => setStep(2)}><ArrowLeft size={16} /> Back</button>
                 <button className="btn btn-brand w-full" onClick={handleStart} disabled={loading}>
-                  {loading ? <><Loader2 size={18} className="spin" style={{ animation: 'spin 1s linear infinite' }} /> Initializing...</> : 'Launch Environment'}
+                  {loading ? (
+                    <>
+                      <Loader2 size={18} className="spin" style={{ animation: 'spin 1s linear infinite' }} /> 
+                      {referenceFiles.length > 0 ? 'Indexing & Embedding...' : 'Initializing...'}
+                    </>
+                  ) : 'Launch Environment'}
                 </button>
               </div>
             </div>

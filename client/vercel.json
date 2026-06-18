@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://server-sage-rho-24.vercel.app/api/:path*"
+      "destination": "https://ai-interview-platform-sepia-pi.vercel.app/api/:path*"
     },
     {
       "source": "/(.*)",
