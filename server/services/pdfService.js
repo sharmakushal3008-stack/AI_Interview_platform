@@ -1,3 +1,9 @@
+if (typeof global.DOMMatrix === 'undefined') {
+  global.DOMMatrix = class DOMMatrix {
+    constructor() {}
+  };
+}
+
 /**
  * Extract text from a PDF buffer using pdfjs-dist (Node 24 compatible).
  */
